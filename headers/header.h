@@ -59,4 +59,5 @@ void calcul_change (int new_change)
         int remainder = new_change % bills[i];
         new_change = remainder;
     }if (new_change != 0){printf("there is RS %.2f left\n", (double)new_change/100);}
+    
 }
