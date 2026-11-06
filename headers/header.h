@@ -1,88 +1,74 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h> 
+#include <stdbool.h>   /* FIX: needed for true/false */
+#include <math.h>      /* lround (compile with -lm) */
 #include <time.h>
+ 
 #define MAX_PRICE 3000
 #define MIN_PRICE 150
 #define SIZE 13
-
-typedef  struct  
+ 
+typedef struct
 {
     double value;
     int count;
-}BILLS;
-
+} BILLS;
+ 
+/* ---------- helpers ---------- */
+ 
+/* FIX (price precision): the old version generated prices in cents (e.g. 12.33)
+   but the smallest bill is 0.05, so some amounts could never be given back.
+   Now the price is always a multiple of 0.05. */
 double generatePrice()
 {
-    srand(time(NULL));
-    double due_price = rand()%((MAX_PRICE * 100)-(MIN_PRICE * 100)+1)+(MIN_PRICE * 100);
-    due_price = due_price/100;
-    printf("Hello, you need to pay: RS %.2f\n", due_price);
-    
-    return due_price;
+    int steps = rand() % ((MAX_PRICE - MIN_PRICE) * 20 + 1) + MIN_PRICE * 20;
+    return steps / 20.0;
 }
-
-static void clear_buffer(void)
+ 
+void clear_buffer(void)
 {
     int c;
     while ((c = getchar()) != '\n' && c != EOF)
         ;
 }
-
-double ask_to_pay ()
+ 
+/* FIX (double truncated with (int)): (int)(x * 100) can lose a cent
+   (1234.9999999 -> 1234). lround rounds to the nearest cent instead.
+   From here on, money is handled as whole cents (int), not double. */
+int to_cents(double v)
+{
+    return (int)lround(v * 100.0);
+}
+ 
+/* ---------- payment ---------- */
+ 
+/* CHANGE: loop instead of recursion (no stack growth on repeated bad input) */
+double ask_to_pay()
 {
     double amount;
-    printf("Please enter the amount: ");
-
-    if(scanf("%lf", &amount) != 1)
+    while (scanf("%lf", &amount) != 1)
     {
         clear_buffer();
         printf("Wrong format, please try again!\n");
-        return ask_to_pay();  // réessayer
     }
     return amount;
 }
-
+ 
+/* CHANGE: simplified. The old version had an unreachable "break" after "return"
+   and a useless "else if" (the opposite of "<" is already ">="). */
 double compare(double paid_price, double due_price)
 {
-   while (true)
-   {
-        if (paid_price < due_price)
-        {
-           printf("Insuffisant amount!\n");
-           paid_price = ask_to_pay();
-            continue;
-        }
-        
-        else if (paid_price >= due_price)
-        {
-            printf("Thanks!\n");
-            return paid_price - due_price;
-            break;
-        }
-    }
-}
-/*
-void calcul_change (int new_change)
-{
-    
-    int bills[13] = {{100000, 50000, 20000, 10000, 5000, 2500, 2000, 1000, 500, 100, 50, 20, 5},
-                     {1, 2, 4, 1, 3, 2, 7, 4, 2 ,1 ,4, 2, 4, 1}};
-    for (int i = 0; i < sizeof(bills)/sizeof(bills[0]); i++)
+    while (paid_price < due_price)
     {
-        //to check if bills is needed or not
-        int needed = new_change / bills[i];
-        
-        if (needed >= 1)
-            {
-                printf("you'll need:%d x RS %d\n", needed, bills[i]/100);
-            }    
-        int remainder = new_change % bills[i];
-        new_change = remainder;
-    }if (new_change != 0){printf("there is RS %.2f left\n", (double)new_change/100);}
+        printf("Insufficient amount!\n");
+        paid_price = ask_to_pay();
+    }
+    printf("Registering...!\n");
+    return paid_price - due_price;
 }
-*/
-
+ 
+/* ---------- cash box ---------- */
+ 
 void refill(BILLS bills[])
 {
     int choice;
@@ -105,24 +91,24 @@ void refill(BILLS bills[])
         printf("0. quit\n");
         printf(" \n");
         printf("==> ");
-
+ 
         if (scanf("%d", &choice) != 1)
         {
             clear_buffer();
             printf("Wrong format, please try again!\n");
-            choice = -1;   /* évite d'utiliser choice non initialisé et force à reboucler */
+            choice = -1;   /* avoids using an uninitialized choice and loops again */
             continue;
         }
-
+ 
         if (choice == 0)
         {
             printf("leaving ...\n");
         }
-        else if (choice >= 1 && choice <= 13)
+        else if (choice >= 1 && choice <= SIZE)
         {
             int number;
             printf("How many bills of RS %.2f do you want? ", bills[choice - 1].value);
-
+ 
             if (scanf("%d", &number) != 1 || number < 0)
             {
                 clear_buffer();
@@ -139,15 +125,163 @@ void refill(BILLS bills[])
             printf("Invalid choice\n");
         }
     } while (choice != 0);
-
-    printf("Refilled successfully\n");
+ 
+    printf("Refilled successfully\n\n");
 }
-
-void showCash (BILLS bills[])
+ 
+/* Rewritten to fix several bugs:
+   - FIX (operator precedence): the old "(int)change*100 % (int)bills[i].value*100"
+     was evaluated as "(((int)change*100) % (int)bills[i].value) * 100", which is wrong.
+     For the 0.5 / 0.2 / 0.05 bills, (int)value is 0, so it was a modulo by zero (crash).
+   - FIX (mixed units): "change" started in rupees but became cents after
+     "change = remainder", so the next iterations and the final print were wrong.
+     Now everything is in cents.
+   - FIX (stock never decreased): bills[i].count is now decremented.
+   - FIX (after refill): the old "continue" skipped to the next bill without
+     recomputing. Now the whole breakdown is recomputed after a refill.
+   - FIX (switch default): the old "default: ;" carried on as if nothing happened.
+   - The exact breakdown is ALWAYS displayed, even when the stock is too low:
+     the bills that are short are flagged with what is available and what is missing.
+   - The stock is only modified when every needed bill is available. */
+void compute_change(double change, BILLS bills[])
 {
-    for (int i = 0; i < SIZE; i++)
+    int remaining = to_cents(change);
+ 
+    if (remaining == 0)
     {
-        printf("Il y a %d billet(s) de RS %.2f\n", bills[i].count, bills[i].value);
+        printf("No change to give.\n\n");
+        return;
+    }
+ 
+    while (true)
+    {
+        int plan[SIZE];
+        int left = remaining;
+        bool enough = true;
+ 
+        /* 1. Exact breakdown, ignoring the stock (integer cents, no double drift) */
+        for (int i = 0; i < SIZE; i++)
+        {
+            int unit = to_cents(bills[i].value);
+            plan[i]  = left / unit;
+            left    -= plan[i] * unit;
+        }
+ 
+        /* 2. Display it, and flag the bills the cash box cannot cover */
+        printf("Change to give: RS %.2f\n", remaining / 100.0);
+        for (int i = 0; i < SIZE; i++)
+        {
+            if (plan[i] == 0)
+                continue;
+ 
+            printf("you'll need: %d x RS %.2f", plan[i], bills[i].value);
+            if (plan[i] > bills[i].count)
+            {
+                enough = false;
+                printf("   <-- only %d available, %d missing",
+                       bills[i].count, plan[i] - bills[i].count);
+            }
+            printf("\n");
+        }
+        if (left > 0)
+            printf("there is RS %.2f left (no smaller bill)\n", left / 100.0);
+        printf("\n");
+ 
+        /* 3. Enough stock: take the bills out of the cash box */
+        if (enough)
+        {
+            for (int i = 0; i < SIZE; i++)
+                bills[i].count -= plan[i];   /* FIX: the stock is now decreased */
+            printf("Change given successfully!\n\n");
+            return;
+        }
+ 
+        /* 4. Not enough stock: close or refill, then recompute */
+        printf("Not enough bills in the cash box.\n");
+        printf("1. close the cash box\n");
+        printf("2. refill cash\n");
+        printf("==> ");
+ 
+        int choice;
+        if (scanf("%d", &choice) != 1)
+        {
+            clear_buffer();
+            printf("Wrong format, please try again!\n");
+            continue;
+        }
+        if (choice == 1) exit(1);
+        if (choice == 2) refill(bills);
+        printf("\n");
     }
 }
-
+ 
+/* FIX: the old "%d" with (int)bills[i].value displayed 0 for 0.5, 0.2 and 0.05.
+   Now "%.2f" shows the real value. */
+void showCash(BILLS bills[])
+{
+    printf(" \n");
+    printf("Those are the available cash:  \n\n");
+    for (int i = 0; i < SIZE; i++)
+    {
+        printf("RS %.2f ===>  %d bill(s) \n", bills[i].value, bills[i].count);
+    }
+    printf(" \n");
+}
+ 
+/* ---------- menu ---------- */
+ 
+void menu(BILLS bills[], double *due_price, double *paid_price)
+{
+    int choice;
+    double change = 0;
+    printf("Welcome! ");
+    do
+    {
+        printf("Please choose action to perform:\n\n");
+        printf("[++++]1. check available bills\n");
+        printf("[++++]2. Refill bills\n");
+        printf("[++++]3. Show article price\n");
+        printf("[++++]4. Ask to pay\n");
+        printf("[++++]5. Compute change\n");
+        printf("[++++]0. quit\n");
+        printf("===>");
+ 
+        if (scanf("%d", &choice) != 1)
+        {
+            clear_buffer();
+            printf("Wrong format, please try again!\n");
+            choice = -1;
+            continue;
+        }
+ 
+        printf(" \n");
+        switch (choice)
+        {
+            case 1:
+                showCash(bills);
+                break;
+            case 2:
+                refill(bills);
+                break;
+            case 3:
+                printf("Hello, the price is : RS %.2f\n\n", *due_price);
+                break;
+            case 4:
+                printf("Please enter the amount: ");
+                *paid_price = ask_to_pay();
+                change = compare(*paid_price, *due_price);
+                break;
+            case 5:
+                compute_change(change, bills);
+                change = 0;   /* FIX: reset, otherwise the same change could be given several times */
+                break;
+            case 0:
+                break;
+            default:
+                printf("Invalid choice\n\n");   /* CHANGE: the old "default: ;" did nothing */
+                break;
+        }
+    } while (choice != 0);
+ 
+    printf("leaving ...\n");
+}
