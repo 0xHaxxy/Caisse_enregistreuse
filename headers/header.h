@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>   /* FIX: needed for true/false */
-#include <math.h>      /* lround (compile with -lm) */
+#include <stdbool.h>   
+#include <math.h>      
 #include <time.h>
  
 #define MAX_PRICE 3000
@@ -14,7 +14,7 @@ typedef struct
     int count;
 } BILLS;
  
-/* ---------- helpers ---------- */
+
  
 /* FIX (price precision): the old version generated prices in cents (e.g. 12.33)
    but the smallest bill is 0.05, so some amounts could never be given back.
@@ -40,9 +40,6 @@ int to_cents(double v)
     return (int)lround(v * 100.0);
 }
  
-/* ---------- payment ---------- */
- 
-/* CHANGE: loop instead of recursion (no stack growth on repeated bad input) */
 double ask_to_pay()
 {
     double amount;
@@ -54,8 +51,6 @@ double ask_to_pay()
     return amount;
 }
  
-/* CHANGE: simplified. The old version had an unreachable "break" after "return"
-   and a useless "else if" (the opposite of "<" is already ">="). */
 double compare(double paid_price, double due_price)
 {
     while (paid_price < due_price)
